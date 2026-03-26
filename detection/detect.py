@@ -33,6 +33,10 @@ from config import (
     LLM_TIMEOUT,
     MAX_QUERY_LENGTH,
     get_threshold,
+    OPENROUTER_API_KEY,
+    OPENROUTER_MODEL,
+    OPENROUTER_BASE_URL,
+    LLM_TIMEOUT,
 )
 from logger import get_logger
 
