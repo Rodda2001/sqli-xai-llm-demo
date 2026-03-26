@@ -157,7 +157,10 @@ var (
 
 func resolveBaseDir() string {
 	if BASE_DIR != "" {
-		return BASE_DIR
+		if _, err := os.Stat(BASE_DIR + "/tests/generate_log.py"); err == nil {
+			return BASE_DIR
+		}
+		log.Printf("⚠ BASE_DIR ignored, script not found there: %s", BASE_DIR)
 	}
 	return "."
 }
