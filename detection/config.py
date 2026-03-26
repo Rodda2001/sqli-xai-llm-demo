@@ -36,11 +36,11 @@ def get_threshold() -> float:
     return DEFAULT_THRESHOLD
 
 
-# ── LLM / xAI (Grok) settings ─────────────────────────
-XAI_API_KEY  = os.getenv("XAI_API_KEY", "")
-XAI_MODEL    = os.getenv("XAI_MODEL", "grok-3-mini")
-XAI_BASE_URL = os.getenv("XAI_BASE_URL", "https://api.x.ai/v1")
-LLM_TIMEOUT  = int(os.getenv("LLM_TIMEOUT", "30"))
+# ── LLM / OpenRouter settings ───────────────────────
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/auto")
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "30"))
 
 # Legacy aliases kept so nothing else breaks if referenced
 OLLAMA_URL   = os.getenv("OLLAMA_URL", "")
