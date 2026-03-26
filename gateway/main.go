@@ -268,157 +268,163 @@ const (
 	SMTP_PASS = "golh xtlj qiii mvgn"
 )
 
+// // ── Send email alert ──────────────────────────────────
+// func sendEmailAlert(result *DetectionResult) {
+// 	alertEmailRaw := getConfig("alert_email")
+// 	if alertEmailRaw == "" {
+// 		log.Println("No alert recipients configured — skipping email")
+// 		return
+// 	}
+
+// 	recipients := []string{}
+// 	for _, e := range strings.Split(alertEmailRaw, ",") {
+// 		trimmed := strings.TrimSpace(e)
+// 		if trimmed != "" {
+// 			recipients = append(recipients, trimmed)
+// 		}
+// 	}
+// 	if len(recipients) == 0 {
+// 		log.Println("No valid recipients — skipping email")
+// 		return
+// 	}
+
+// 	subject := fmt.Sprintf("🚨 SQLi Alert — %s — %s — %.1f%%%%",
+// 		result.SourceIP, result.AttackType, result.Confidence)
+
+// 	sevColor := "#ff4757"
+// 	switch strings.ToLower(result.Severity) {
+// 	case "high":
+// 		sevColor = "#ff7e30"
+// 	case "medium":
+// 		sevColor = "#ffc300"
+// 	case "low", "normal":
+// 		sevColor = "#2ed573"
+// 	}
+
+// 	mitreTechnique := "N/A"
+// 	mitreName := "N/A"
+// 	mitreTactic := "N/A"
+// 	if result.Mitre != nil {
+// 		mitreTechnique = result.Mitre.Technique
+// 		mitreName = result.Mitre.Name
+// 		mitreTactic = result.Mitre.Tactic
+// 	}
+
+// 	shapRows := ""
+// 	for i, t := range result.XAITokens {
+// 		if i >= 5 {
+// 			break
+// 		}
+// 		barWidth := int(t.Shap * 100)
+// 		if barWidth > 100 {
+// 			barWidth = 100
+// 		}
+// 		barColor := "#ff4757"
+// 		if t.Direction == "normal" {
+// 			barColor = "#2ed573"
+// 		}
+// 		shapRows += fmt.Sprintf(`<tr>
+// 			<td style="padding:6px 10px;font-family:'Courier New',monospace;font-size:12px;color:#90afc8;background:#151e28;border-radius:3px;">%s</td>
+// 			<td style="padding:6px 10px;"><div style="background:#151e28;border-radius:4px;height:8px;width:100%%;"><div style="background:%s;border-radius:4px;height:8px;width:%d%%;"></div></div></td>
+// 			<td style="padding:6px 10px;font-family:'Courier New',monospace;font-size:11px;color:%s;text-align:right;">%.4f</td>
+// 		</tr>`, t.Token, barColor, barWidth, barColor, t.Shap)
+// 	}
+
+// 	attackDisplay := strings.ToUpper(strings.ReplaceAll(result.AttackType, "_", " "))
+
+// 	body := fmt.Sprintf(`<!DOCTYPE html>
+// <html><head><meta charset="UTF-8"></head>
+// <body style="margin:0;padding:0;background:#0a0e13;font-family:'Segoe UI',Arial,sans-serif;">
+// <table width="100%%%%" cellpadding="0" cellspacing="0" style="background:#0a0e13;padding:24px 0;">
+// <tr><td align="center">
+// <table width="600" cellpadding="0" cellspacing="0" style="background:#0d1117;border-radius:12px;overflow:hidden;border:1px solid #1e2d40;">
+//   <tr><td style="background:#111820;padding:18px 24px;border-bottom:1px solid #1e2d40;">
+//     <table width="100%%%%" cellpadding="0" cellspacing="0"><tr>
+//       <td><span style="font-size:15px;font-weight:700;color:#dce8f4;">🛡 Query<span style="color:#3d8ef5;">Guard</span></span></td>
+//       <td style="text-align:right;"><span style="font-size:11px;color:#ff4757;background:rgba(255,71,87,0.08);border:1px solid rgba(255,71,87,0.2);padding:4px 10px;border-radius:20px;">● ALERT</span></td>
+//     </tr></table>
+//   </td></tr>
+//   <tr><td style="padding:24px 24px 0;">
+//     <div style="background:rgba(255,71,87,0.06);border:1px solid %s;border-radius:8px;border-left:4px solid %s;padding:16px 20px;">
+//       <div style="font-size:10px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:#526b85;margin-bottom:6px;">Detection Result</div>
+//       <div style="font-size:20px;font-weight:700;color:%s;">⚠ %s</div>
+//       <div style="margin-top:10px;font-family:'Courier New',monospace;font-size:18px;font-weight:600;color:%s;">%.1f%%%% confidence</div>
+//     </div>
+//   </td></tr>
+//   <tr><td style="padding:16px 24px 0;">
+//     <table width="100%%%%" cellpadding="0" cellspacing="8"><tr>
+//       <td width="50%%%%" valign="top" style="background:#151e28;border:1px solid #1e2d40;border-radius:7px;padding:14px;">
+//         <div style="font-size:10px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:#526b85;margin-bottom:10px;">Threat Intel</div>
+//         <table width="100%%%%" cellpadding="0" cellspacing="0">
+//           <tr><td style="font-size:12px;color:#526b85;padding:4px 0;">Severity</td><td style="font-family:'Courier New',monospace;font-size:11px;color:%s;text-align:right;padding:4px 0;">%s</td></tr>
+//           <tr><td style="font-size:12px;color:#526b85;padding:4px 0;">Type</td><td style="font-family:'Courier New',monospace;font-size:11px;color:#dce8f4;text-align:right;padding:4px 0;">%s</td></tr>
+//           <tr><td style="font-size:12px;color:#526b85;padding:4px 0;">MITRE</td><td style="font-family:'Courier New',monospace;font-size:11px;color:#a78bfa;text-align:right;padding:4px 0;">%s</td></tr>
+//         </table>
+//       </td>
+//       <td width="50%%%%" valign="top" style="background:#151e28;border:1px solid #1e2d40;border-radius:7px;padding:14px;">
+//         <div style="font-size:10px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:#526b85;margin-bottom:10px;">Source</div>
+//         <table width="100%%%%" cellpadding="0" cellspacing="0">
+//           <tr><td style="font-size:12px;color:#526b85;padding:4px 0;">IP</td><td style="font-family:'Courier New',monospace;font-size:11px;color:#3d8ef5;text-align:right;padding:4px 0;">%s</td></tr>
+//           <tr><td style="font-size:12px;color:#526b85;padding:4px 0;">Host</td><td style="font-family:'Courier New',monospace;font-size:11px;color:#dce8f4;text-align:right;padding:4px 0;">%s</td></tr>
+//           <tr><td style="font-size:12px;color:#526b85;padding:4px 0;">Time</td><td style="font-family:'Courier New',monospace;font-size:11px;color:#dce8f4;text-align:right;padding:4px 0;">%s</td></tr>
+//         </table>
+//       </td>
+//     </tr></table>
+//   </td></tr>
+//   <tr><td style="padding:16px 24px 0;">
+//     <div style="font-size:10px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:#526b85;margin-bottom:10px;">Detected Query</div>
+//     <div style="background:#0a0e13;border:1px solid #1e2d40;border-left:3px solid #ff4757;border-radius:0 6px 6px 0;padding:12px 14px;font-family:'Courier New',monospace;font-size:12px;color:#f0c060;word-break:break-all;line-height:1.6;">%s</div>
+//   </td></tr>
+//   <tr><td style="padding:16px 24px 0;">
+//     <div style="font-size:10px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:#526b85;margin-bottom:10px;">MITRE ATT&CK</div>
+//     <span style="display:inline-block;background:rgba(167,139,250,0.1);border:1px solid rgba(167,139,250,0.25);color:#a78bfa;padding:5px 10px;border-radius:4px;font-family:'Courier New',monospace;font-size:11px;margin-right:6px;">🗡 %s</span>
+//     <span style="display:inline-block;background:rgba(167,139,250,0.1);border:1px solid rgba(167,139,250,0.25);color:#a78bfa;padding:5px 10px;border-radius:4px;font-family:'Courier New',monospace;font-size:11px;margin-right:6px;">📋 %s</span>
+//     <span style="display:inline-block;background:rgba(167,139,250,0.1);border:1px solid rgba(167,139,250,0.25);color:#a78bfa;padding:5px 10px;border-radius:4px;font-family:'Courier New',monospace;font-size:11px;">🎯 %s</span>
+//   </td></tr>
+//   <tr><td style="padding:16px 24px 0;">
+//     <div style="font-size:10px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:#526b85;margin-bottom:10px;">SHAP Explainability</div>
+//     <table width="100%%%%" cellpadding="0" cellspacing="0">%s</table>
+//   </td></tr>
+//   <tr><td style="padding:16px 24px 0;">
+//     <div style="font-size:10px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:#526b85;margin-bottom:10px;">LLM Security Analysis</div>
+//     <div style="background:#151e28;border:1px solid #1e2d40;border-radius:7px;padding:14px;font-size:12px;line-height:1.8;color:#90afc8;">%s</div>
+//   </td></tr>
+//   <tr><td style="padding:24px;text-align:center;border-top:1px solid #1e2d40;margin-top:16px;">
+//     <div style="font-size:11px;color:#526b85;">QueryGuard Detection System v3.0 — ML + XAI + LLM</div>
+//   </td></tr>
+// </table>
+// </td></tr></table>
+// </body></html>`,
+// 		sevColor, sevColor,
+// 		sevColor, attackDisplay,
+// 		sevColor, result.Confidence,
+// 		sevColor, strings.ToUpper(result.Severity),
+// 		strings.ReplaceAll(result.AttackType, "_", " "),
+// 		mitreTechnique,
+// 		result.SourceIP, result.SourceHost, result.Timestamp,
+// 		result.Query,
+// 		mitreTechnique, mitreName, mitreTactic,
+// 		shapRows,
+// 		result.LLMExplanation,
+// 	)
+
+// 	toHeader := strings.Join(recipients, ", ")
+// 	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n%s",
+// 		SMTP_USER, toHeader, subject, body)
+
+// 	auth := smtp.PlainAuth("", SMTP_USER, SMTP_PASS, "smtp.gmail.com")
+// 	err := smtp.SendMail("smtp.gmail.com:587", auth, SMTP_USER, recipients, []byte(msg))
+// 	if err != nil {
+// 		log.Printf("email alert failed: %v", err)
+// 	} else {
+// 		log.Printf("📧 Email alert sent to %s", toHeader)
+// 	}
+// }
+
 // ── Send email alert ──────────────────────────────────
 func sendEmailAlert(result *DetectionResult) {
-	alertEmailRaw := getConfig("alert_email")
-	if alertEmailRaw == "" {
-		log.Println("No alert recipients configured — skipping email")
-		return
-	}
-
-	recipients := []string{}
-	for _, e := range strings.Split(alertEmailRaw, ",") {
-		trimmed := strings.TrimSpace(e)
-		if trimmed != "" {
-			recipients = append(recipients, trimmed)
-		}
-	}
-	if len(recipients) == 0 {
-		log.Println("No valid recipients — skipping email")
-		return
-	}
-
-	subject := fmt.Sprintf("🚨 SQLi Alert — %s — %s — %.1f%%%%",
-		result.SourceIP, result.AttackType, result.Confidence)
-
-	sevColor := "#ff4757"
-	switch strings.ToLower(result.Severity) {
-	case "high":
-		sevColor = "#ff7e30"
-	case "medium":
-		sevColor = "#ffc300"
-	case "low", "normal":
-		sevColor = "#2ed573"
-	}
-
-	mitreTechnique := "N/A"
-	mitreName := "N/A"
-	mitreTactic := "N/A"
-	if result.Mitre != nil {
-		mitreTechnique = result.Mitre.Technique
-		mitreName = result.Mitre.Name
-		mitreTactic = result.Mitre.Tactic
-	}
-
-	shapRows := ""
-	for i, t := range result.XAITokens {
-		if i >= 5 {
-			break
-		}
-		barWidth := int(t.Shap * 100)
-		if barWidth > 100 {
-			barWidth = 100
-		}
-		barColor := "#ff4757"
-		if t.Direction == "normal" {
-			barColor = "#2ed573"
-		}
-		shapRows += fmt.Sprintf(`<tr>
-			<td style="padding:6px 10px;font-family:'Courier New',monospace;font-size:12px;color:#90afc8;background:#151e28;border-radius:3px;">%s</td>
-			<td style="padding:6px 10px;"><div style="background:#151e28;border-radius:4px;height:8px;width:100%%;"><div style="background:%s;border-radius:4px;height:8px;width:%d%%;"></div></div></td>
-			<td style="padding:6px 10px;font-family:'Courier New',monospace;font-size:11px;color:%s;text-align:right;">%.4f</td>
-		</tr>`, t.Token, barColor, barWidth, barColor, t.Shap)
-	}
-
-	attackDisplay := strings.ToUpper(strings.ReplaceAll(result.AttackType, "_", " "))
-
-	body := fmt.Sprintf(`<!DOCTYPE html>
-<html><head><meta charset="UTF-8"></head>
-<body style="margin:0;padding:0;background:#0a0e13;font-family:'Segoe UI',Arial,sans-serif;">
-<table width="100%%%%" cellpadding="0" cellspacing="0" style="background:#0a0e13;padding:24px 0;">
-<tr><td align="center">
-<table width="600" cellpadding="0" cellspacing="0" style="background:#0d1117;border-radius:12px;overflow:hidden;border:1px solid #1e2d40;">
-  <tr><td style="background:#111820;padding:18px 24px;border-bottom:1px solid #1e2d40;">
-    <table width="100%%%%" cellpadding="0" cellspacing="0"><tr>
-      <td><span style="font-size:15px;font-weight:700;color:#dce8f4;">🛡 Query<span style="color:#3d8ef5;">Guard</span></span></td>
-      <td style="text-align:right;"><span style="font-size:11px;color:#ff4757;background:rgba(255,71,87,0.08);border:1px solid rgba(255,71,87,0.2);padding:4px 10px;border-radius:20px;">● ALERT</span></td>
-    </tr></table>
-  </td></tr>
-  <tr><td style="padding:24px 24px 0;">
-    <div style="background:rgba(255,71,87,0.06);border:1px solid %s;border-radius:8px;border-left:4px solid %s;padding:16px 20px;">
-      <div style="font-size:10px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:#526b85;margin-bottom:6px;">Detection Result</div>
-      <div style="font-size:20px;font-weight:700;color:%s;">⚠ %s</div>
-      <div style="margin-top:10px;font-family:'Courier New',monospace;font-size:18px;font-weight:600;color:%s;">%.1f%%%% confidence</div>
-    </div>
-  </td></tr>
-  <tr><td style="padding:16px 24px 0;">
-    <table width="100%%%%" cellpadding="0" cellspacing="8"><tr>
-      <td width="50%%%%" valign="top" style="background:#151e28;border:1px solid #1e2d40;border-radius:7px;padding:14px;">
-        <div style="font-size:10px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:#526b85;margin-bottom:10px;">Threat Intel</div>
-        <table width="100%%%%" cellpadding="0" cellspacing="0">
-          <tr><td style="font-size:12px;color:#526b85;padding:4px 0;">Severity</td><td style="font-family:'Courier New',monospace;font-size:11px;color:%s;text-align:right;padding:4px 0;">%s</td></tr>
-          <tr><td style="font-size:12px;color:#526b85;padding:4px 0;">Type</td><td style="font-family:'Courier New',monospace;font-size:11px;color:#dce8f4;text-align:right;padding:4px 0;">%s</td></tr>
-          <tr><td style="font-size:12px;color:#526b85;padding:4px 0;">MITRE</td><td style="font-family:'Courier New',monospace;font-size:11px;color:#a78bfa;text-align:right;padding:4px 0;">%s</td></tr>
-        </table>
-      </td>
-      <td width="50%%%%" valign="top" style="background:#151e28;border:1px solid #1e2d40;border-radius:7px;padding:14px;">
-        <div style="font-size:10px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:#526b85;margin-bottom:10px;">Source</div>
-        <table width="100%%%%" cellpadding="0" cellspacing="0">
-          <tr><td style="font-size:12px;color:#526b85;padding:4px 0;">IP</td><td style="font-family:'Courier New',monospace;font-size:11px;color:#3d8ef5;text-align:right;padding:4px 0;">%s</td></tr>
-          <tr><td style="font-size:12px;color:#526b85;padding:4px 0;">Host</td><td style="font-family:'Courier New',monospace;font-size:11px;color:#dce8f4;text-align:right;padding:4px 0;">%s</td></tr>
-          <tr><td style="font-size:12px;color:#526b85;padding:4px 0;">Time</td><td style="font-family:'Courier New',monospace;font-size:11px;color:#dce8f4;text-align:right;padding:4px 0;">%s</td></tr>
-        </table>
-      </td>
-    </tr></table>
-  </td></tr>
-  <tr><td style="padding:16px 24px 0;">
-    <div style="font-size:10px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:#526b85;margin-bottom:10px;">Detected Query</div>
-    <div style="background:#0a0e13;border:1px solid #1e2d40;border-left:3px solid #ff4757;border-radius:0 6px 6px 0;padding:12px 14px;font-family:'Courier New',monospace;font-size:12px;color:#f0c060;word-break:break-all;line-height:1.6;">%s</div>
-  </td></tr>
-  <tr><td style="padding:16px 24px 0;">
-    <div style="font-size:10px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:#526b85;margin-bottom:10px;">MITRE ATT&CK</div>
-    <span style="display:inline-block;background:rgba(167,139,250,0.1);border:1px solid rgba(167,139,250,0.25);color:#a78bfa;padding:5px 10px;border-radius:4px;font-family:'Courier New',monospace;font-size:11px;margin-right:6px;">🗡 %s</span>
-    <span style="display:inline-block;background:rgba(167,139,250,0.1);border:1px solid rgba(167,139,250,0.25);color:#a78bfa;padding:5px 10px;border-radius:4px;font-family:'Courier New',monospace;font-size:11px;margin-right:6px;">📋 %s</span>
-    <span style="display:inline-block;background:rgba(167,139,250,0.1);border:1px solid rgba(167,139,250,0.25);color:#a78bfa;padding:5px 10px;border-radius:4px;font-family:'Courier New',monospace;font-size:11px;">🎯 %s</span>
-  </td></tr>
-  <tr><td style="padding:16px 24px 0;">
-    <div style="font-size:10px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:#526b85;margin-bottom:10px;">SHAP Explainability</div>
-    <table width="100%%%%" cellpadding="0" cellspacing="0">%s</table>
-  </td></tr>
-  <tr><td style="padding:16px 24px 0;">
-    <div style="font-size:10px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:#526b85;margin-bottom:10px;">LLM Security Analysis</div>
-    <div style="background:#151e28;border:1px solid #1e2d40;border-radius:7px;padding:14px;font-size:12px;line-height:1.8;color:#90afc8;">%s</div>
-  </td></tr>
-  <tr><td style="padding:24px;text-align:center;border-top:1px solid #1e2d40;margin-top:16px;">
-    <div style="font-size:11px;color:#526b85;">QueryGuard Detection System v3.0 — ML + XAI + LLM</div>
-  </td></tr>
-</table>
-</td></tr></table>
-</body></html>`,
-		sevColor, sevColor,
-		sevColor, attackDisplay,
-		sevColor, result.Confidence,
-		sevColor, strings.ToUpper(result.Severity),
-		strings.ReplaceAll(result.AttackType, "_", " "),
-		mitreTechnique,
-		result.SourceIP, result.SourceHost, result.Timestamp,
-		result.Query,
-		mitreTechnique, mitreName, mitreTactic,
-		shapRows,
-		result.LLMExplanation,
-	)
-
-	toHeader := strings.Join(recipients, ", ")
-	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n%s",
-		SMTP_USER, toHeader, subject, body)
-
-	auth := smtp.PlainAuth("", SMTP_USER, SMTP_PASS, "smtp.gmail.com")
-	err := smtp.SendMail("smtp.gmail.com:587", auth, SMTP_USER, recipients, []byte(msg))
-	if err != nil {
-		log.Printf("email alert failed: %v", err)
-	} else {
-		log.Printf("📧 Email alert sent to %s", toHeader)
-	}
+	log.Println("📧 Email sending disabled from backend — skipping alert")
+	return
 }
 
 // ── Send feedback email ───────────────────────────────
