@@ -307,19 +307,23 @@ Recommendation: [One sentence — the exact immediate response step for this spe
     try:
         import requests
 
-        if not XAI_API_KEY:
-            log.warning("XAI_API_KEY not set — using fallback explanation")
+        if not OPENROUTER_API_KEY:
+            log.warning("OPENROUTER_API_KEY not set — using fallback explanation")
             return generate_fallback_explanation(report)
 
         response = requests.post(
-            f"{XAI_BASE_URL}/chat/completions",
+            f"{OPENROUTER_BASE_URL}/chat/completions",
             headers={
-                "Authorization": f"Bearer {XAI_API_KEY}",
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
                 "Content-Type": "application/json",
+                "HTTP-Referer": "https://sqli-xai-llm-demo.onrender.com",
+                "X-Title": "QueryGuard",
             },
             json={
-                "model": XAI_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
+                "model": OPENROUTER_MODEL,
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ],
                 "max_tokens": 300,
                 "stream": False,
             },
@@ -327,17 +331,17 @@ Recommendation: [One sentence — the exact immediate response step for this spe
         )
 
         if response.status_code == 200:
-            text = response.json()["choices"][0]["message"]["content"].strip()
+            data = response.json()
+            text = data["choices"][0]["message"]["content"].strip()
             if text and len(text) > 20:
-                log.info(f"LLM explanation generated ({len(text)} chars)")
+                log.info(f"LLM explanation generated via OpenRouter ({len(text)} chars)")
                 return text
-
-            log.warning("LLM returned empty or too-short response, using fallback")
+            log.warning("OpenRouter returned empty or too-short response, using fallback")
         else:
-            log.warning(f"LLM returned HTTP {response.status_code}: {response.text[:200]}")
+            log.warning(f"OpenRouter returned HTTP {response.status_code}: {response.text[:300]}")
 
     except Exception as e:
-        log.warning(f"LLM call failed: {e}")
+        log.warning(f"OpenRouter call failed: {e}")
 
     return generate_fallback_explanation(report)
 
