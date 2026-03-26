@@ -205,28 +205,26 @@ func startSimulation() error {
 	simAgentCmd.Stderr = os.Stderr
 	if err := simAgentCmd.Start(); err != nil {
 		if simGenCmd.Process != nil {
-			simGenCmd.Process.Kill()
-			simGenCmd.Wait()
+			_ = simGenCmd.Process.Kill()
+			_, _ = simGenCmd.Process.Wait()
 		}
 		return fmt.Errorf("failed to start agent: %w", err)
 	}
 	log.Printf("🚀 Agent started (PID %d)", simAgentCmd.Process.Pid)
 
 	simRunning = true
-	return nil
-}
 
 	go func() {
-		if simGenCmd.Process != nil {
-			simGenCmd.Wait()
+		if simGenCmd != nil && simGenCmd.Process != nil {
+			_ = simGenCmd.Wait()
 		}
 		simMu.Lock()
 		defer simMu.Unlock()
 		if simRunning {
 			log.Println("⚠ Log generator exited unexpectedly")
 			if simAgentCmd != nil && simAgentCmd.Process != nil {
-				simAgentCmd.Process.Kill()
-				simAgentCmd.Wait()
+				_ = simAgentCmd.Process.Kill()
+				_ = simAgentCmd.Wait()
 			}
 			simRunning = false
 		}
@@ -244,14 +242,14 @@ func stopSimulation() {
 	}
 
 	if simAgentCmd != nil && simAgentCmd.Process != nil {
-		simAgentCmd.Process.Kill()
-		simAgentCmd.Wait()
+		_ = simAgentCmd.Process.Kill()
+		_ = simAgentCmd.Wait()
 		log.Println("🛑 Agent stopped")
 	}
 
 	if simGenCmd != nil && simGenCmd.Process != nil {
-		simGenCmd.Process.Kill()
-		simGenCmd.Wait()
+		_ = simGenCmd.Process.Kill()
+		_ = simGenCmd.Wait()
 		log.Println("🛑 Log generator stopped")
 	}
 
@@ -505,17 +503,14 @@ func sendFeedbackEmail(fb FeedbackRequest) error {
 
 // ── Routes ────────────────────────────────────────────
 func setupRoutes(app *fiber.App) {
-
-	// Serve built dashboard (production mode)
 	dashboardPath := "dashboard/dist"
 	if _, err := os.Stat(dashboardPath); err == nil {
-		log.Println("📦 Serving built dashboard from /dashboard/dist")
+		log.Println("📦 Serving built dashboard from dashboard/dist")
 		app.Static("/", dashboardPath)
 	} else {
 		log.Println("⚠ No built dashboard found — run 'npm run build' in dashboard/")
 	}
 
-	// Status
 	app.Get("/api/status", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
 			"status":  "online",
@@ -524,7 +519,6 @@ func setupRoutes(app *fiber.App) {
 		})
 	})
 
-	// Config
 	app.Get("/api/config", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
 			"alert_email": getConfig("alert_email"),
@@ -546,7 +540,6 @@ func setupRoutes(app *fiber.App) {
 		return c.JSON(fiber.Map{"status": "saved"})
 	})
 
-	// ── Simulate ──────────────────────────────────────
 	app.Post("/api/simulate/start", func(c *fiber.Ctx) error {
 		if err := startSimulation(); err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
@@ -563,7 +556,6 @@ func setupRoutes(app *fiber.App) {
 		return c.JSON(fiber.Map{"running": isSimulationRunning()})
 	})
 
-	// ── Feedback ──────────────────────────────────────
 	app.Post("/api/feedback", func(c *fiber.Ctx) error {
 		var fb FeedbackRequest
 		if err := c.BodyParser(&fb); err != nil {
@@ -580,7 +572,6 @@ func setupRoutes(app *fiber.App) {
 		return c.JSON(fiber.Map{"status": "sent"})
 	})
 
-	// Ingest — Log Agent posts queries here
 	app.Post("/api/ingest", func(c *fiber.Ctx) error {
 		var req DetectionRequest
 		if err := c.BodyParser(&req); err != nil {
@@ -590,11 +581,15 @@ func setupRoutes(app *fiber.App) {
 			return c.Status(400).JSON(fiber.Map{"error": "query is required"})
 		}
 
+		log.Printf("📥 Ingest received: query=%q ip=%s host=%s", req.Query, req.SourceIP, req.SourceHost)
+
 		result, err := callDetection(req.Query, req.SourceIP, req.SourceHost)
 		if err != nil {
 			log.Printf("detection error: %v", err)
 			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 		}
+
+		log.Printf("📤 Detection result: is_sqli=%v confidence=%.2f attack=%s", result.IsSQLi, result.Confidence, result.AttackType)
 
 		if err := saveDetection(result); err != nil {
 			log.Printf("db error: %v", err)
@@ -616,7 +611,6 @@ func setupRoutes(app *fiber.App) {
 		})
 	})
 
-	// Analyze — manual scan
 	app.Post("/api/analyze", func(c *fiber.Ctx) error {
 		var req DetectionRequest
 		if err := c.BodyParser(&req); err != nil {
@@ -635,7 +629,6 @@ func setupRoutes(app *fiber.App) {
 		return c.JSON(result)
 	})
 
-	// History
 	app.Get("/api/history", func(c *fiber.Ctx) error {
 		limit := c.QueryInt("limit", 100)
 		results, err := getHistory(limit)
@@ -645,7 +638,6 @@ func setupRoutes(app *fiber.App) {
 		return c.JSON(fiber.Map{"count": len(results), "items": results})
 	})
 
-	// Stats
 	app.Get("/api/stats", func(c *fiber.Ctx) error {
 		stats, err := getStats()
 		if err != nil {
@@ -654,14 +646,13 @@ func setupRoutes(app *fiber.App) {
 		return c.JSON(stats)
 	})
 
-	// WebSocket
 	app.Get("/api/ws", websocket.New(func(c *websocket.Conn) {
 		mu.Lock()
 		clients[c] = true
 		mu.Unlock()
 		log.Printf("Client connected — total: %d", len(clients))
 
-		c.WriteJSON(fiber.Map{"type": "connected", "message": "QueryGuard Gateway v3.0"})
+		_ = c.WriteJSON(fiber.Map{"type": "connected", "message": "QueryGuard Gateway v3.0"})
 
 		for {
 			_, _, err := c.ReadMessage()
@@ -676,7 +667,6 @@ func setupRoutes(app *fiber.App) {
 		log.Printf("Client disconnected — total: %d", len(clients))
 	}))
 
-	// SPA fallback for React Router
 	if _, err := os.Stat(dashboardPath); err == nil {
 		app.Get("/*", func(c *fiber.Ctx) error {
 			return c.SendFile(dashboardPath + "/index.html")
@@ -719,9 +709,12 @@ func initDB() error {
 		return fmt.Errorf("failed to create config table: %w", err)
 	}
 
-	defaults := map[string]string{"alert_email": "", "threshold": "70"}
+	defaults := map[string]string{
+		"alert_email": "",
+		"threshold":   "70",
+	}
 	for key, value := range defaults {
-		db.Exec(`INSERT OR IGNORE INTO config (key, value) VALUES (?, ?)`, key, value)
+		_, _ = db.Exec(`INSERT OR IGNORE INTO config (key, value) VALUES (?, ?)`, key, value)
 	}
 
 	log.Println("✅ Database initialized")
@@ -730,7 +723,7 @@ func initDB() error {
 
 func getConfig(key string) string {
 	var value string
-	db.QueryRow(`SELECT value FROM config WHERE key = ?`, key).Scan(&value)
+	_ = db.QueryRow(`SELECT value FROM config WHERE key = ?`, key).Scan(&value)
 	return value
 }
 
@@ -766,24 +759,35 @@ func getHistory(limit int) ([]DetectionResult, error) {
 		var r DetectionResult
 		var isSQLi int
 		var mitreStr, xaiStr string
-		err := rows.Scan(&r.Query, &r.Timestamp, &isSQLi, &r.Confidence,
-			&r.AttackType, &r.Severity, &r.SourceIP, &mitreStr, &xaiStr, &r.LLMExplanation)
+
+		err := rows.Scan(
+			&r.Query, &r.Timestamp, &isSQLi, &r.Confidence,
+			&r.AttackType, &r.Severity, &r.SourceIP,
+			&mitreStr, &xaiStr, &r.LLMExplanation,
+		)
 		if err != nil {
 			continue
 		}
+
 		r.IsSQLi = isSQLi == 1
-		json.Unmarshal([]byte(mitreStr), &r.Mitre)
-		json.Unmarshal([]byte(xaiStr), &r.XAITokens)
+		_ = json.Unmarshal([]byte(mitreStr), &r.Mitre)
+		_ = json.Unmarshal([]byte(xaiStr), &r.XAITokens)
 		results = append(results, r)
 	}
+
 	return results, nil
 }
 
 func getStats() (fiber.Map, error) {
 	var total, sqli int
-	db.QueryRow("SELECT COUNT(*) FROM detections").Scan(&total)
-	db.QueryRow("SELECT COUNT(*) FROM detections WHERE is_sqli = 1").Scan(&sqli)
-	return fiber.Map{"total": total, "sqli_detected": sqli, "normal": total - sqli}, nil
+	_ = db.QueryRow("SELECT COUNT(*) FROM detections").Scan(&total)
+	_ = db.QueryRow("SELECT COUNT(*) FROM detections WHERE is_sqli = 1").Scan(&sqli)
+
+	return fiber.Map{
+		"total":         total,
+		"sqli_detected": sqli,
+		"normal":        total - sqli,
+	}, nil
 }
 
 // ── Main ──────────────────────────────────────────────
