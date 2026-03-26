@@ -159,14 +159,7 @@ func resolveBaseDir() string {
 	if BASE_DIR != "" {
 		return BASE_DIR
 	}
-	if _, err := os.Stat("../tests/generate_log.py"); err == nil {
-		return ".."
-	}
-	home := os.Getenv("HOME")
-	if home == "" {
-		home = "/root"
-	}
-	return home + "/Documents/SQLI+XAI+LLM"
+	return "."
 }
 
 func startSimulation() error {
