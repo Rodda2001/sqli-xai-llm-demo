@@ -45,6 +45,9 @@ LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "30"))
 # Legacy aliases kept so nothing else breaks if referenced
 OLLAMA_URL   = os.getenv("OLLAMA_URL", "")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "")
+XAI_API_KEY = OPENROUTER_API_KEY
+XAI_MODEL = OPENROUTER_MODEL
+XAI_BASE_URL = OPENROUTER_BASE_URL
 
 # ── Logging ───────────────────────────────────────────
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
