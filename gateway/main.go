@@ -508,7 +508,7 @@ func sendFeedbackEmail(fb FeedbackRequest) error {
 func setupRoutes(app *fiber.App) {
 
 	// Serve built dashboard (production mode)
-	dashboardPath := "../dashboard/dist"
+	dashboardPath := "dashboard/dist"
 	if _, err := os.Stat(dashboardPath); err == nil {
 		log.Println("📦 Serving built dashboard from ../dashboard/dist")
 		app.Static("/", dashboardPath)
