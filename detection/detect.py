@@ -3,14 +3,6 @@ FileSense — Detection Engine (Improved)
 ========================================
 Inference pipeline: preprocessing → Model 1 (binary) → Model 2 (subtype) →
 SHAP/XAI (SQLi only) → LLM explanation (SQLi only) → response.
-
-Key fixes:
-  - Uses shared preprocessing (same as training)
-  - Loads SHAP background from training sample
-  - Safe queries: no XAI, no LLM, no false "unavailable" messages
-  - SQLi queries: full XAI + LLM pipeline
-  - Dynamic threshold from meta.json
-  - Robust error handling throughout
 """
 
 import os
@@ -23,54 +15,104 @@ import numpy as np
 from datetime import datetime
 from scipy.sparse import hstack, csr_matrix
 
-from preprocessing import normalize_query, extract_structural_features, NUM_STRUCTURAL_FEATURES
+from preprocessing import (
+    normalize_query,
+    extract_structural_features,
+    NUM_STRUCTURAL_FEATURES,
+    STRUCTURAL_FEATURE_NAMES,
+)
 from config import (
-    MODEL_DIR, META_PATH, SHAP_BG_PATH,
-    XAI_API_KEY, XAI_MODEL, XAI_BASE_URL, LLM_TIMEOUT,
-    MAX_QUERY_LENGTH, get_threshold,
+    MODEL1_PATH,
+    VECTORIZER1_PATH,
+    MODEL2_PATH,
+    VECTORIZER2_PATH,
+    SHAP_BG_PATH,
+    XAI_API_KEY,
+    XAI_MODEL,
+    XAI_BASE_URL,
+    LLM_TIMEOUT,
+    MAX_QUERY_LENGTH,
+    get_threshold,
 )
 from logger import get_logger
 
 log = get_logger("detect")
 
 # ══════════════════════════════════════════════════════════════════
+# Helpers
+# ══════════════════════════════════════════════════════════════════
+
+def validate_vectorizer(name: str, vectorizer) -> None:
+    """Ensure a loaded TF-IDF vectorizer is truly fitted."""
+    try:
+        if not hasattr(vectorizer, "vocabulary_") or not vectorizer.vocabulary_:
+            raise ValueError("missing vocabulary_")
+
+        # This is the exact operation that was failing in your logs
+        _ = vectorizer.transform(["select 1"])
+
+        if hasattr(vectorizer, "idf_"):
+            _ = vectorizer.idf_
+
+        _ = vectorizer.get_feature_names_out()
+        log.info("%s validated successfully", name)
+
+    except Exception as e:
+        raise RuntimeError(f"{name} is not a valid fitted TF-IDF vectorizer: {e}") from e
+
+
+def load_artifacts():
+    log.info("Loading models...")
+
+    model1 = joblib.load(MODEL1_PATH)
+    vectorizer1 = joblib.load(VECTORIZER1_PATH)
+    model2 = joblib.load(MODEL2_PATH)
+    vectorizer2 = joblib.load(VECTORIZER2_PATH)
+
+    validate_vectorizer("vectorizer1", vectorizer1)
+    validate_vectorizer("vectorizer2", vectorizer2)
+
+    log.info("Models loaded successfully")
+    return model1, vectorizer1, model2, vectorizer2
+
+
+# ══════════════════════════════════════════════════════════════════
 # Model Loading
 # ══════════════════════════════════════════════════════════════════
 
-log.info("Loading models...")
-
 try:
-    model1      = joblib.load(os.path.join(MODEL_DIR, "model1.joblib"))
-    vectorizer1 = joblib.load(os.path.join(MODEL_DIR, "vectorizer1.joblib"))
-    model2      = joblib.load(os.path.join(MODEL_DIR, "model2.joblib"))
-    vectorizer2 = joblib.load(os.path.join(MODEL_DIR, "vectorizer2.joblib"))
-    log.info("Models loaded successfully")
+    model1, vectorizer1, model2, vectorizer2 = load_artifacts()
 except Exception as e:
     log.error(f"Failed to load models: {e}")
     raise
+
 
 # ── Load SHAP background ─────────────────────────────
 explainer1 = None
 try:
     if os.path.exists(SHAP_BG_PATH):
         bg_data = np.load(SHAP_BG_PATH)["data"]
-        # Verify dimensions match model
         expected_features = vectorizer1.transform(["test"]).shape[1] + NUM_STRUCTURAL_FEATURES
+
         if bg_data.shape[1] == expected_features:
             explainer1 = shap.LinearExplainer(model1, bg_data)
             log.info(f"SHAP explainer loaded with background sample ({bg_data.shape[0]} rows)")
         else:
-            log.warning(f"SHAP background dimension mismatch: got {bg_data.shape[1]}, expected {expected_features}. Using fallback.")
-    
+            log.warning(
+                f"SHAP background dimension mismatch: got {bg_data.shape[1]}, expected {expected_features}. Using fallback."
+            )
+
     if explainer1 is None:
-        # Fallback: single-sample background (less accurate but functional)
         fallback_bg = vectorizer1.transform(["select 1"])
         struct_bg = csr_matrix(extract_structural_features("select 1").reshape(1, -1))
         fallback_combined = hstack([fallback_bg, struct_bg])
         explainer1 = shap.LinearExplainer(model1, fallback_combined)
         log.warning("Using fallback SHAP background (single sample)")
+
 except Exception as e:
     log.error(f"SHAP explainer setup failed: {e}")
+    explainer1 = None
+
 
 # ── Load threshold ────────────────────────────────────
 THRESHOLD = get_threshold()
@@ -83,58 +125,58 @@ log.info(f"Detection threshold: {THRESHOLD}%")
 
 MITRE_MAP = {
     "auth_bypass": {
-        "tactic":    "Initial Access",
+        "tactic": "Initial Access",
         "technique": "T1190",
-        "name":      "Exploit Public-Facing Application",
-        "severity":  "critical"
+        "name": "Exploit Public-Facing Application",
+        "severity": "critical",
     },
     "union_based": {
-        "tactic":    "Collection",
+        "tactic": "Collection",
         "technique": "T1005",
-        "name":      "Data from Local System",
-        "severity":  "critical"
+        "name": "Data from Local System",
+        "severity": "critical",
     },
     "blind_boolean": {
-        "tactic":    "Discovery",
+        "tactic": "Discovery",
         "technique": "T1082",
-        "name":      "System Information Discovery",
-        "severity":  "high"
+        "name": "System Information Discovery",
+        "severity": "high",
     },
     "blind_time": {
-        "tactic":    "Discovery",
+        "tactic": "Discovery",
         "technique": "T1082",
-        "name":      "System Information Discovery",
-        "severity":  "high"
+        "name": "System Information Discovery",
+        "severity": "high",
     },
     "error_based": {
-        "tactic":    "Collection",
+        "tactic": "Collection",
         "technique": "T1005",
-        "name":      "Data from Local System",
-        "severity":  "high"
+        "name": "Data from Local System",
+        "severity": "high",
     },
     "stacked_queries": {
-        "tactic":    "Execution",
+        "tactic": "Execution",
         "technique": "T1059",
-        "name":      "Command and Scripting Interpreter",
-        "severity":  "critical"
+        "name": "Command and Scripting Interpreter",
+        "severity": "critical",
     },
     "evasion": {
-        "tactic":    "Defense Evasion",
+        "tactic": "Defense Evasion",
         "technique": "T1027",
-        "name":      "Obfuscated Files or Information",
-        "severity":  "high"
+        "name": "Obfuscated Files or Information",
+        "severity": "high",
     },
     "other": {
-        "tactic":    "Initial Access",
+        "tactic": "Initial Access",
         "technique": "T1190",
-        "name":      "Exploit Public-Facing Application",
-        "severity":  "medium"
+        "name": "Exploit Public-Facing Application",
+        "severity": "medium",
     },
 }
 
 
 # ══════════════════════════════════════════════════════════════════
-# Feature building (same as training)
+# Feature building
 # ══════════════════════════════════════════════════════════════════
 
 def build_inference_features(query: str, vectorizer):
@@ -150,50 +192,48 @@ def build_inference_features(query: str, vectorizer):
 # ══════════════════════════════════════════════════════════════════
 
 SQL_PATTERNS = [
-    (r"(?i)OR\s+['\"]?\d+['\"]?\s*=\s*['\"]?\d+['\"]?",   "OR 1=1 (tautology)"),
-    (r"(?i)OR\s+['\"][^'\"]*['\"]\s*=\s*['\"]",            "OR ''='' (string tautology)"),
-    (r"(?i)OR\s+TRUE",                                      "OR TRUE"),
-    (r"(?i)UNION\s+(ALL\s+)?SELECT",                        "UNION SELECT"),
-    (r"(?i)information_schema\.(tables|columns|schemata)",   "information_schema access"),
-    (r"(?i)GROUP_CONCAT\s*\(",                               "GROUP_CONCAT() exfil"),
-    (r"(?i)CONCAT\s*\(",                                     "CONCAT() exfil"),
-    (r"(?i)SLEEP\s*\(\s*\d+\s*\)",                          "SLEEP() time delay"),
-    (r"(?i)WAITFOR\s+DELAY",                                 "WAITFOR DELAY"),
-    (r"(?i)BENCHMARK\s*\(",                                  "BENCHMARK() timing"),
-    (r"(?i)PG_SLEEP\s*\(",                                   "pg_sleep() timing"),
-    (r"(?i)SUBSTRING\s*\(",                                  "SUBSTRING() extraction"),
-    (r"(?i)ASCII\s*\(\s*SUBSTRING",                          "ASCII(SUBSTRING()) blind"),
-    (r"(?i)IF\s*\(.+SLEEP",                                  "IF(condition,SLEEP) blind"),
-    (r"(?i)EXTRACTVALUE\s*\(",                               "EXTRACTVALUE() error"),
-    (r"(?i)UPDATEXML\s*\(",                                  "UPDATEXML() error"),
-    (r"(?i)FLOOR\s*\(\s*RAND",                              "FLOOR(RAND()) error"),
-    (r"(?i)EXP\s*\(\s*~",                                   "EXP(~) error overflow"),
-    (r"(?i);\s*DROP\s+TABLE",                                "DROP TABLE (destructive)"),
-    (r"(?i);\s*DELETE\s+FROM",                               "DELETE FROM (destructive)"),
-    (r"(?i);\s*INSERT\s+INTO",                               "INSERT INTO (injection)"),
-    (r"(?i);\s*UPDATE\s+\w+\s+SET",                         "UPDATE SET (tampering)"),
-    (r"(?i)XP_CMDSHELL",                                     "xp_cmdshell (RCE)"),
-    (r"(?i)EXEC\s+(master\.\.)?xp_",                        "EXEC xp_ (RCE)"),
-    (r"/\*\*/",                                              "/**/ comment bypass"),
-    (r"/\*!.+\*/",                                           "/*!...*/ MySQL bypass"),
-    (r"(?i)CHAR\s*\(\s*\d+",                                "CHAR() encoding"),
-    (r"0[xX][0-9a-fA-F]{2,}",                               "hex encoding"),
-    (r"(?i)@@version",                                       "@@version fingerprint"),
-    (r"(?i)SELECT\s+.*FROM\s+mysql\.user",                  "mysql.user access"),
-    (r"(?i)LOAD_FILE\s*\(",                                  "LOAD_FILE() file read"),
-    (r"(?i)INTO\s+OUTFILE",                                  "INTO OUTFILE write"),
-    (r"(?i)SHOW\s+DATABASES",                                "SHOW DATABASES recon"),
-    (r"--\s*$|--\s+",                                        "-- comment terminator"),
-    (r"#\s*$",                                               "# comment terminator"),
+    (r"(?i)OR\s+['\"]?\d+['\"]?\s*=\s*['\"]?\d+['\"]?", "OR 1=1 (tautology)"),
+    (r"(?i)OR\s+['\"][^'\"]*['\"]\s*=\s*['\"]", "OR ''='' (string tautology)"),
+    (r"(?i)OR\s+TRUE", "OR TRUE"),
+    (r"(?i)UNION\s+(ALL\s+)?SELECT", "UNION SELECT"),
+    (r"(?i)information_schema\.(tables|columns|schemata)", "information_schema access"),
+    (r"(?i)GROUP_CONCAT\s*\(", "GROUP_CONCAT() exfil"),
+    (r"(?i)CONCAT\s*\(", "CONCAT() exfil"),
+    (r"(?i)SLEEP\s*\(\s*\d+\s*\)", "SLEEP() time delay"),
+    (r"(?i)WAITFOR\s+DELAY", "WAITFOR DELAY"),
+    (r"(?i)BENCHMARK\s*\(", "BENCHMARK() timing"),
+    (r"(?i)PG_SLEEP\s*\(", "pg_sleep() timing"),
+    (r"(?i)SUBSTRING\s*\(", "SUBSTRING() extraction"),
+    (r"(?i)ASCII\s*\(\s*SUBSTRING", "ASCII(SUBSTRING()) blind"),
+    (r"(?i)IF\s*\(.+SLEEP", "IF(condition,SLEEP) blind"),
+    (r"(?i)EXTRACTVALUE\s*\(", "EXTRACTVALUE() error"),
+    (r"(?i)UPDATEXML\s*\(", "UPDATEXML() error"),
+    (r"(?i)FLOOR\s*\(\s*RAND", "FLOOR(RAND()) error"),
+    (r"(?i)EXP\s*\(\s*~", "EXP(~) error overflow"),
+    (r"(?i);\s*DROP\s+TABLE", "DROP TABLE (destructive)"),
+    (r"(?i);\s*DELETE\s+FROM", "DELETE FROM (destructive)"),
+    (r"(?i);\s*INSERT\s+INTO", "INSERT INTO (injection)"),
+    (r"(?i);\s*UPDATE\s+\w+\s+SET", "UPDATE SET (tampering)"),
+    (r"(?i)XP_CMDSHELL", "xp_cmdshell (RCE)"),
+    (r"(?i)EXEC\s+(master\.\.)?xp_", "EXEC xp_ (RCE)"),
+    (r"/\*\*/", "/**/ comment bypass"),
+    (r"/\*!.+\*/", "/*!...*/ MySQL bypass"),
+    (r"(?i)CHAR\s*\(\s*\d+", "CHAR() encoding"),
+    (r"0[xX][0-9a-fA-F]{2,}", "hex encoding"),
+    (r"(?i)@@version", "@@version fingerprint"),
+    (r"(?i)SELECT\s+.*FROM\s+mysql\.user", "mysql.user access"),
+    (r"(?i)LOAD_FILE\s*\(", "LOAD_FILE() file read"),
+    (r"(?i)INTO\s+OUTFILE", "INTO OUTFILE write"),
+    (r"(?i)SHOW\s+DATABASES", "SHOW DATABASES recon"),
+    (r"--\s*$|--\s+", "-- comment terminator"),
+    (r"#\s*$", "# comment terminator"),
 ]
 
 
 def generate_xai_tokens(query: str, vec_features, shap_values_array, feature_names) -> list:
-    """Generate SQL-domain-aware XAI tokens for a SQLi query."""
-    
-    # Build raw SHAP scores from non-zero features
     raw_tokens = {}
     dense = vec_features.toarray()[0]
+
     for i in range(len(shap_values_array)):
         if i < len(feature_names) and dense[i] > 0:
             raw_tokens[str(feature_names[i]).strip()] = float(shap_values_array[i])
@@ -202,9 +242,8 @@ def generate_xai_tokens(query: str, vec_features, shap_values_array, feature_nam
     total_positive_shap = sum(positive_shaps) or 1.0
 
     xai_tokens = []
-
-    # PRIMARY: regex pattern matching against actual query
     matched = []
+
     for pattern, label in SQL_PATTERNS:
         m = re.search(pattern, query)
         if m:
@@ -221,12 +260,11 @@ def generate_xai_tokens(query: str, vec_features, shap_values_array, feature_nam
 
             final_score = max(frag_shap, base_score)
             matched.append({
-                "token":     label,
-                "shap":      round(final_score, 4),
-                "direction": "sqli"
+                "token": label,
+                "shap": round(final_score, 4),
+                "direction": "sqli",
             })
 
-    # Deduplicate and take top 6
     seen = set()
     for p in sorted(matched, key=lambda x: x["shap"], reverse=True):
         if p["token"] not in seen:
@@ -235,49 +273,8 @@ def generate_xai_tokens(query: str, vec_features, shap_values_array, feature_nam
         if len(xai_tokens) >= 6:
             break
 
-    # FALLBACK: keyword buckets if no patterns matched
     if not xai_tokens:
-        keyword_buckets = {
-            "SELECT keyword":   ["se", "el", "le", "ec", "ct", "sel", "ele", "lec", "ect"],
-            "WHERE clause":     ["wh", "he", "er", "re", "whe", "her", "ere"],
-            "OR operator":      [" or", "or ", " or "],
-            "AND operator":     [" an", "and", "nd "],
-            "UNION keyword":    ["un", "ni", "io", "uni", "nio", "ion"],
-            "FROM keyword":     ["fr", "ro", "om", "fro", "rom"],
-            "comment (--)":     ["--", "- ", " -"],
-            "quote chars":      ["'", "''", "='", "' "],
-            "equals operator":  ["= ", " ="],
-            "numeric payload":  [" 1", "1=", "=1", " 0"],
-        }
-
-        bucket_scores = {}
-        for bucket_name, fragments in keyword_buckets.items():
-            score = 0.0
-            for token, shap_val in raw_tokens.items():
-                t = token.strip().lower()
-                if shap_val > 0:
-                    for frag in fragments:
-                        if frag in t or t in frag:
-                            score += shap_val
-                            break
-            if score > 0.01:
-                bucket_scores[bucket_name] = score
-
-        if not bucket_scores:
-            top_abs = sorted(raw_tokens.items(), key=lambda x: abs(x[1]), reverse=True)[:6]
-            for token, val in top_abs:
-                xai_tokens.append({
-                    "token":     token,
-                    "shap":      round(abs(val), 4),
-                    "direction": "sqli" if val > 0 else "normal"
-                })
-        else:
-            for name, score in sorted(bucket_scores.items(), key=lambda x: -x[1])[:6]:
-                xai_tokens.append({
-                    "token":     name,
-                    "shap":      round(score, 4),
-                    "direction": "sqli"
-                })
+        xai_tokens = _fallback_xai_tokens(query)
 
     return xai_tokens
 
@@ -287,13 +284,11 @@ def generate_xai_tokens(query: str, vec_features, shap_values_array, feature_nam
 # ══════════════════════════════════════════════════════════════════
 
 def get_llm_explanation(report: dict) -> str:
-    """Get LLM-generated explanation for a SQLi detection. Returns explanation string."""
-    
-    tokens  = ", ".join([f"'{t['token']}'" for t in report["xai_tokens"][:5]])
-    attack  = report["attack_type"]
-    conf    = report["confidence"]
-    mitre   = report["mitre"]
-    query   = report["query"]
+    tokens = ", ".join([f"'{t['token']}'" for t in report["xai_tokens"][:5]])
+    attack = report["attack_type"]
+    conf = report["confidence"]
+    mitre = report["mitre"]
+    query = report["query"]
 
     prompt = f"""You are a SOC analyst writing an incident alert. Be extremely concise and technical. No fluff, no generic advice.
 
@@ -307,15 +302,11 @@ Threat: [One sentence — what this specific query does and the attacker's exact
 Reason: [One sentence — why this was flagged, referencing actual patterns found]
 Key Signals: [Comma-separated list of the specific suspicious tokens/patterns]
 Recommendation: [One sentence — the exact immediate response step for this specific attack]
-
-Rules:
-- Reference the ACTUAL query content, not generic descriptions
-- No bullet points, no numbered lists, no headers beyond the 4 labels
-- No generic advice like "update software" or "use strong passwords"
-- Write like you're filing a real incident ticket"""
+"""
 
     try:
         import requests
+
         if not XAI_API_KEY:
             log.warning("XAI_API_KEY not set — using fallback explanation")
             return generate_fallback_explanation(report)
@@ -334,69 +325,69 @@ Rules:
             },
             timeout=LLM_TIMEOUT,
         )
+
         if response.status_code == 200:
             text = response.json()["choices"][0]["message"]["content"].strip()
             if text and len(text) > 20:
                 log.info(f"LLM explanation generated ({len(text)} chars)")
                 return text
+
             log.warning("LLM returned empty or too-short response, using fallback")
         else:
             log.warning(f"LLM returned HTTP {response.status_code}: {response.text[:200]}")
+
     except Exception as e:
         log.warning(f"LLM call failed: {e}")
 
-    # ── Strong domain-specific fallback ──
     return generate_fallback_explanation(report)
 
 
 def generate_fallback_explanation(report: dict) -> str:
-    """Generate a strong, domain-specific fallback explanation when LLM is unavailable."""
-    attack  = report["attack_type"]
-    conf    = report["confidence"]
-    mitre   = report["mitre"]
-    tokens  = ", ".join([t["token"] for t in report["xai_tokens"][:4]])
-    query   = report["query"][:120]
+    attack = report["attack_type"]
+    conf = report["confidence"]
+    mitre = report["mitre"]
+    tokens = ", ".join([t["token"] for t in report["xai_tokens"][:4]])
 
     attack_descriptions = {
         "auth_bypass": (
             "Authentication bypass via tautology injection",
             "the query contains a logical tautology that always evaluates to true, bypassing authentication checks",
-            "Verify authentication logic is not vulnerable to boolean injection. Review parameterized query usage on the affected endpoint."
+            "Verify authentication logic is not vulnerable to boolean injection. Review parameterized query usage on the affected endpoint.",
         ),
         "union_based": (
             "UNION-based data exfiltration attempt",
             "the query appends a UNION SELECT to extract data from other database tables, potentially exposing credentials or sensitive records",
-            "Block the source IP immediately. Audit database access logs for successful exfiltration and check if the UNION query returned data to the attacker."
+            "Block the source IP immediately. Audit database access logs for successful exfiltration and check if the UNION query returned data to the attacker.",
         ),
         "blind_time": (
             "Time-based blind SQL injection probe",
             "the query uses time delay functions to infer database content by measuring response latency",
-            "Monitor for repeated slow-response requests from this source. The attacker is likely automating extraction — block the IP and review WAF rules."
+            "Monitor for repeated slow-response requests from this source. The attacker is likely automating extraction — block the IP and review WAF rules.",
         ),
         "blind_boolean": (
             "Boolean-based blind SQL injection",
             "the query uses conditional expressions to infer database content based on true/false response differences",
-            "Check for repeated similar requests with varying conditions. This indicates active data extraction — block and investigate the source."
+            "Check for repeated similar requests with varying conditions. This indicates active data extraction — block and investigate the source.",
         ),
         "error_based": (
             "Error-based SQL injection for data extraction",
             "the query triggers deliberate database errors to leak internal schema and data through error messages",
-            "Ensure database error messages are not exposed to clients. Review the affected endpoint for proper error handling."
+            "Ensure database error messages are not exposed to clients. Review the affected endpoint for proper error handling.",
         ),
         "stacked_queries": (
             "Stacked query injection — potential destructive operation",
             "the query chains multiple SQL statements using semicolons, potentially executing DROP, DELETE, or system commands",
-            "CRITICAL: Verify database integrity immediately. Check for data loss or unauthorized modifications. Block the source and review execution logs."
+            "CRITICAL: Verify database integrity immediately. Check for data loss or unauthorized modifications. Block the source and review execution logs.",
         ),
         "evasion": (
             "Obfuscated SQL injection with evasion techniques",
             "the query uses encoding, comments, or character manipulation to bypass WAF and signature-based detection",
-            "Update WAF rules to handle the detected evasion technique. Investigate whether prior attacks from this source bypassed detection."
+            "Update WAF rules to handle the detected evasion technique. Investigate whether prior attacks from this source bypassed detection.",
         ),
         "other": (
             "SQL injection attempt detected",
             "the query contains suspicious SQL patterns that indicate an injection attempt",
-            "Review the query against the application's expected input format. Block the source if repeated attempts are observed."
+            "Review the query against the application's expected input format. Block the source if repeated attempts are observed.",
         ),
     }
 
@@ -416,92 +407,79 @@ def generate_fallback_explanation(report: dict) -> str:
 # ══════════════════════════════════════════════════════════════════
 
 def detect(query: str) -> dict:
-    """
-    Run the full detection pipeline on a query string.
-    Returns a dict compatible with the gateway/dashboard.
-    """
     start_time = time.time()
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # ── Input validation ──────────────────────────────
     if not query or not isinstance(query, str):
-        return _safe_response("", timestamp, start_time)
-    
+        return _error_response("", timestamp, "invalid query")
+
     query = query.strip()
     if len(query) == 0:
-        return _safe_response("", timestamp, start_time)
-    
+        return _error_response("", timestamp, "empty query")
+
     if len(query) > MAX_QUERY_LENGTH:
         query = query[:MAX_QUERY_LENGTH]
         log.warning(f"Query truncated to {MAX_QUERY_LENGTH} chars")
 
     try:
-        # ── Step 1: Model 1 — Binary Detection ────────
-        vec1       = build_inference_features(query, vectorizer1)
-        proba      = model1.predict_proba(vec1)[0]
+        vec1 = build_inference_features(query, vectorizer1)
+        proba = model1.predict_proba(vec1)[0]
         confidence = float(proba[1]) * 100
-        is_sqli    = confidence >= THRESHOLD
+        is_sqli = confidence >= THRESHOLD
 
-        # ── Step 2: Attack Type (only if SQLi) ────────
         attack_type = "normal"
-        mitre       = None
+        mitre = None
 
         if is_sqli:
-            vec2        = build_inference_features(query, vectorizer2)
+            vec2 = build_inference_features(query, vectorizer2)
             attack_type = model2.predict(vec2)[0]
-            mitre       = MITRE_MAP.get(attack_type, MITRE_MAP["other"])
+            mitre = MITRE_MAP.get(attack_type, MITRE_MAP["other"])
 
-        # ── Step 3: XAI (SQLi only) ──────────────────
         xai_tokens = []
         if is_sqli and explainer1 is not None:
             try:
                 shap_values = explainer1.shap_values(vec1)
-                shap_array  = shap_values[0] if isinstance(shap_values, list) else shap_values[0]
-                
-                # Get combined feature names (TF-IDF + structural)
+                shap_array = shap_values[0] if isinstance(shap_values, list) else shap_values[0]
                 tfidf_names = list(vectorizer1.get_feature_names_out())
-                from preprocessing import STRUCTURAL_FEATURE_NAMES
                 all_names = tfidf_names + STRUCTURAL_FEATURE_NAMES
-                
                 xai_tokens = generate_xai_tokens(query, vec1, shap_array, all_names)
                 log.info(f"XAI generated: {len(xai_tokens)} tokens")
             except Exception as e:
                 log.error(f"SHAP/XAI failed: {e}")
-                # XAI failure for SQLi: produce basic pattern-based tokens
                 xai_tokens = _fallback_xai_tokens(query)
 
-        # ── Step 4: LLM Explanation (SQLi only) ───────
         llm_explanation = None
         if is_sqli:
             try:
                 llm_explanation = get_llm_explanation({
-                    "query":       query,
+                    "query": query,
                     "attack_type": attack_type,
-                    "confidence":  round(confidence, 2),
-                    "mitre":       mitre,
-                    "xai_tokens":  xai_tokens,
+                    "confidence": round(confidence, 2),
+                    "mitre": mitre,
+                    "xai_tokens": xai_tokens,
                 })
             except Exception as e:
                 log.error(f"LLM explanation failed: {e}")
                 llm_explanation = generate_fallback_explanation({
-                    "query": query, "attack_type": attack_type,
-                    "confidence": round(confidence, 2), "mitre": mitre,
+                    "query": query,
+                    "attack_type": attack_type,
+                    "confidence": round(confidence, 2),
+                    "mitre": mitre,
                     "xai_tokens": xai_tokens,
                 })
 
-        # ── Step 5: Build response ────────────────────
         elapsed = round(time.time() - start_time, 3)
 
         report = {
-            "query":           query,
-            "timestamp":       timestamp,
-            "is_sqli":         is_sqli,
-            "confidence":      round(confidence, 2),
-            "label":           "SQLi Detected" if is_sqli else "Normal",
-            "attack_type":     attack_type,
-            "severity":        mitre["severity"] if mitre else "none",
-            "mitre":           mitre,
-            "xai_tokens":      xai_tokens,
+            "query": query,
+            "timestamp": timestamp,
+            "is_sqli": bool(is_sqli),
+            "confidence": round(confidence, 2),
+            "label": "SQLi Detected" if is_sqli else "Normal",
+            "attack_type": attack_type,
+            "severity": mitre["severity"] if mitre else "none",
+            "mitre": mitre,
+            "xai_tokens": xai_tokens,
             "llm_explanation": llm_explanation,
         }
 
@@ -513,30 +491,30 @@ def detect(query: str) -> dict:
         return report
 
     except Exception as e:
-        log.error(f"Detection pipeline error: {e}")
-        return _safe_response(query, timestamp, start_time)
+        log.exception("Detection pipeline error")
+        return _error_response(query, timestamp, str(e))
 
 
-def _safe_response(query: str, timestamp: str, start_time: float) -> dict:
-    """Return a valid safe response on error — never crash the API."""
+def _error_response(query: str, timestamp: str, error_message: str) -> dict:
     return {
-        "query":           query,
-        "timestamp":       timestamp,
-        "is_sqli":         False,
-        "confidence":      0.0,
-        "label":           "Normal",
-        "attack_type":     "normal",
-        "severity":        "none",
-        "mitre":           None,
-        "xai_tokens":      [],
+        "query": query,
+        "timestamp": timestamp,
+        "is_sqli": False,
+        "confidence": 0.0,
+        "label": "Engine Error",
+        "attack_type": "engine_error",
+        "severity": "high",
+        "mitre": None,
+        "xai_tokens": [],
         "llm_explanation": None,
+        "pipeline_error": True,
+        "error": error_message,
     }
 
 
 def _fallback_xai_tokens(query: str) -> list:
-    """Generate basic pattern-based XAI tokens when SHAP fails."""
     tokens = []
-    for pattern, label in SQL_PATTERNS[:15]:  # check top patterns only
+    for pattern, label in SQL_PATTERNS[:15]:
         if re.search(pattern, query):
             tokens.append({"token": label, "shap": 0.5, "direction": "sqli"})
         if len(tokens) >= 4:
@@ -545,10 +523,6 @@ def _fallback_xai_tokens(query: str) -> list:
         tokens.append({"token": "suspicious pattern", "shap": 0.3, "direction": "sqli"})
     return tokens
 
-
-# ══════════════════════════════════════════════════════════════════
-# Quick Test
-# ══════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     test_queries = [
@@ -566,10 +540,12 @@ if __name__ == "__main__":
         print(f"Conf:  {result['confidence']}%")
         print(f"Type:  {result['attack_type']}")
         print(f"Sev:   {result['severity']}")
-        if result['mitre']:
+        if result.get("mitre"):
             print(f"MITRE: {result['mitre']['technique']} — {result['mitre']['name']}")
         print(f"XAI:   {result['xai_tokens'][:3]}")
-        if result['llm_explanation']:
+        if result.get("pipeline_error"):
+            print(f"ERR:   {result.get('error')}")
+        elif result['llm_explanation']:
             print(f"LLM:   {result['llm_explanation'][:150]}...")
         else:
-            print(f"LLM:   (not needed — safe query)")
+            print("LLM:   (not needed — safe query)")
