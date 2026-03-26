@@ -510,7 +510,7 @@ func setupRoutes(app *fiber.App) {
 	// Serve built dashboard (production mode)
 	dashboardPath := "dashboard/dist"
 	if _, err := os.Stat(dashboardPath); err == nil {
-		log.Println("📦 Serving built dashboard from ../dashboard/dist")
+		log.Println("📦 Serving built dashboard from /dashboard/dist")
 		app.Static("/", dashboardPath)
 	} else {
 		log.Println("⚠ No built dashboard found — run 'npm run build' in dashboard/")
