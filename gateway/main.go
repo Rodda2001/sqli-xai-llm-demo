@@ -193,14 +193,13 @@ func startSimulation() error {
 
 	agentDir := baseDir + "/agent"
 	agentBin := agentDir + "/agent"
-
 	endpoint := fmt.Sprintf("http://127.0.0.1:%s/api/ingest", PORT)
 
 	if _, err := os.Stat(agentBin); err == nil {
-	simAgentCmd = exec.Command(agentBin, "-file", logPath, "-endpoint", endpoint)
+		simAgentCmd = exec.Command(agentBin, "-file", logPath, "-endpoint", endpoint)
 	} else {
-	simAgentCmd = exec.Command("go", "run", "main.go", "-file", logPath, "-endpoint", endpoint)
-	simAgentCmd.Dir = agentDir
+		simAgentCmd = exec.Command("go", "run", "main.go", "-file", logPath, "-endpoint", endpoint)
+		simAgentCmd.Dir = agentDir
 	}
 	simAgentCmd.Stdout = os.Stdout
 	simAgentCmd.Stderr = os.Stderr
@@ -214,6 +213,8 @@ func startSimulation() error {
 	log.Printf("🚀 Agent started (PID %d)", simAgentCmd.Process.Pid)
 
 	simRunning = true
+	return nil
+}
 
 	go func() {
 		if simGenCmd.Process != nil {
