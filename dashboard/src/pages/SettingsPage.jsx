@@ -75,7 +75,7 @@ export default function SettingsPage() {
 
       {/* Email input */}
       <div className="form-group">
-        <label className="form-label">Recipients</label>
+        <label className="form-label">Recipients (Email alert functionality is implemented, but delivery is disabled for demo purposes.)</label>
 
         <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
           <input
@@ -86,7 +86,7 @@ export default function SettingsPage() {
             onKeyDown={e => {
               if (e.key === 'Enter') addEmail()
             }}
-            placeholder="analyst@company.com — press Enter(Email alert functionality is implemented, but delivery is disabled for demo purposes.)"
+            placeholder="analyst@company.com — press Enter"
           />
 
           <button
