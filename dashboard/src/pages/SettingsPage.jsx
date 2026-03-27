@@ -86,7 +86,7 @@ export default function SettingsPage() {
             onKeyDown={e => {
               if (e.key === 'Enter') addEmail()
             }}
-            placeholder="analyst@company.com — press Enter"
+            placeholder="analyst@company.com — press Enter(Email alert functionality is implemented, but delivery is disabled for demo purposes.)"
           />
 
           <button
